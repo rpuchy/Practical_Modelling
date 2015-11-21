@@ -1,0 +1,137 @@
+---
+title: "Practical Machine Learning"
+author: "Rudolf Puchy"
+date: "20 November 2015"
+output: html_document
+---
+
+#Overview
+The use of wearable technology has increased notably in the recent past. Along with this increase comes a wealth of data that can be accumulated and analysed. In this experiment data has been collected from multiple locations on the body, the belt, forearm, arm and the dumbell, with the intention of determining if an exercise has been conducted correctly. 6 participants performed the exercise 5 different ways, one correctly and 4 incorrectly.  The data has been analysed and a model has been built to determine if an exercise has been conducted correctly or which common error has been made.
+
+
+#Obtain data
+The data has been obtained from the location below and loaded into R.
+
+```{r}
+setwd("C:\\CourseWork\\Coursera - practical\\Project")
+url<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+dest<-"pml-training.csv"
+download.file(url,dest,method="libcurl",mode="wb")
+train<-read.csv(dest)
+url<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+dest<-"pml-testing.csv"
+download.file(url,dest,method="libcurl",mode="wb")
+test<-read.csv(dest)
+```
+#Load library
+```{r,results='hide',warning=FALSE,message=FALSE}
+library(ggplot2)
+library(AppliedPredictiveModeling)
+library(caret)
+library(dplyr)
+library(rattle)
+library(verification)
+
+```
+
+
+#Clean data
+Check columns for missing data, either NA or empty character. i.e. "". These columns are removed from the dataset if more than 10% are missing or empty.  Timestamps and username and window flag are removed to remove some possibly of overfitting due to irellevant variables.
+```{r,warning=FALSE}
+nas<-data.frame(sapply(train, function(x) sum(is.na(x))))
+#now we remove the columns that are almost completely NA
+#i.e. more than 10% NA it turns out there are either no NA's or lots of NA's
+nas$names<-rownames(nas)
+dropcols<-nas[nas$sapply.train..function.x..sum.is.na.x...>0.1*19622,]                    
+train2<-dplyr::select(train,-one_of(dropcols$name))
+
+#repeat the exercise for missing characters i.e. "" as these don't show up as NA
+nas<-data.frame(sapply(train2, function(x) sum(x %in% "")))
+nas$names<-rownames(nas)
+dropcols<-nas[nas$sapply.train2..function.x..sum.x..in......>0.1*19622,]                    
+train3<-dplyr::select(train2,-one_of(dropcols$name))
+rm(train)
+rm(train2)
+train4<-dplyr::select(train3,-one_of("X","user_name","raw_timestamp_part_1","raw_timestamp_part_2","cvtd_timestamp","new_window"))
+rm(train3)
+
+```
+
+
+#Perform cross validation
+Perform cross validation on model fitting to estimate the out of sample error.  Accuracy has been used as the error variable, a number close to 1 shows near perfect fitting.  K-fold cross validation will be used, 5 folds will be used to reduce the amount of time taken to produce the model.  5 random forests will be built and each will be evaluated against the test data.  The accruacy will then be reported to determine the out-of-sample error.  The final accuracy will be reported as the average of the 5 folds.
+
+```{r,cache=T,warning=FALSE}
+k<-5
+#construct k folds
+train4$id<-sample(1:k,nrow(train4),replace=T)
+list<-1:k
+
+prediction <- data.frame()
+testsetCopy <- data.frame()
+predictionProb<- data.frame()
+err.vect<-NULL
+
+accuracy<-function(x)
+{
+  result<-table(x[,1],x[,2])
+  sum(diag(result))/sum(sum(result))
+}
+
+for (i in 1:k){
+
+  # remove rows with id i from dataframe to create training set
+  # select rows with id i to create test set
+  trainingset <- subset(train4, id %in% list[-i])
+  testset <- subset(train4, id %in% c(i))
+  
+  # run a random forest model
+  fitMod <- train(trainingset$classe ~ ., method="rf", data = trainingset,ntree=100)
+  
+  # remove response column 54, classe variable
+  temp <- as.data.frame(predict(fitMod, testset[,-54]))
+  tempProb<- as.data.frame(predict(fitMod, testset[,-54],type="prob"))
+  # append this iteration's predictions to the end of the prediction data frame
+  prediction <- rbind(prediction, temp)
+  predictionProb <- rbind(predictionProb,tempProb)
+
+  err.vect[i]<-accuracy(cbind(testset[,54],temp))
+  print(paste("Accuracy for fold", i, "is", err.vect[i]))
+  # append this iteration's test set to the test set copy data frame
+  # keep only the classe Column
+  testsetCopy <- rbind(testsetCopy, as.data.frame(testset[,54]))
+}
+print(paste("overall average accuracy :",mean(err.vect)))
+result <- cbind(prediction, testsetCopy[, 1])
+names(result) <- c("Predicted", "Actual")
+table(result$Actual,result$Predicted)
+
+```
+The accuracy is not particularly volatile and as such the out-of-sample error is unlikely to be significantly worse than the in-sample error.  We expect the out-of-sample error to be similar to the overall average accuracy.
+
+#Rebuild model on all data
+We now rebuild the model on 70% of the data retaining 30% for testing.
+```{r,cache=T}
+inTrain<-createDataPartition(train4$classe,p=0.7,list=F)
+trainsetF<-train4[inTrain,]
+testsetF<-train4[-inTrain,]
+
+finalfitMod <- train(trainsetF$classe ~ ., method="rf", data = trainsetF[,-55],ntree=100)
+```
+
+
+#validate on test set
+We now predict the test data and produce a final confusion matrix.
+```{r}
+FinalPredict<-predict(finalfitMod,testsetF)
+
+table(testsetF[,54],FinalPredict)
+```
+
+Check accuracy of test set
+```{r}
+accuracy(cbind(testsetF[,54],FinalPredict))
+```
+
+#Conclusion
+The confusion matrix shows high accuracy, a random forest clear is able to fit the data well.
